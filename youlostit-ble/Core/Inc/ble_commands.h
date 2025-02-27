@@ -75,7 +75,7 @@
  uint8_t EVENT_DISCONNECT_PENDING[] = {0x04, 0x0F, 0x04, 0x00, 0x01, 0x06, 0x04};
  
  uint8_t EVENT_CONNECTED[] = {0x04, 0x3E, 0x13, 0x01, 0x00};
- uint8_t EVENT_GATT_CHANGED = {0x04, 0xFF, 0x0B, 0x01, 0x0C};
+ uint8_t EVENT_GATT_CHANGED[] = {0x04, 0xFF, 0x0B, 0x01, 0x0C};
  
  uint8_t ACI_GAP_SET_NON_DISCOVERABLE[] = {}; // TODO - fill this in
  uint8_t ACI_GAP_SET_NON_DISCOVERABLE_COMPLETE[] = {}; // TODO - fill this in

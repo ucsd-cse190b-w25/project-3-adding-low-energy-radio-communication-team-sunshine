@@ -219,7 +219,7 @@
 			 *(connectionHandler) = buffer[5];
 			 *(connectionHandler + 1) = buffer[6];
 		 }
-		 if (checkEventResp(buffer, EVENT_GATT_CHANGED, 5)){
+		 if (checkEventResp(buffer, EVENT_GATT_CHANGED, 5) == BLE_OK){
 			 *(connectionHandler) = buffer[5];
 			 *(connectionHandler + 1) = buffer[6];
 		 }
