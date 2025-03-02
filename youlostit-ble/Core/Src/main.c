@@ -23,6 +23,44 @@
 
 #include <stdlib.h>
 
+#include <stdint.h>
+#include <stdio.h>
+
+/* Include memory map of our MCU */
+#include <stm32l475xx.h>
+
+/* Include LED driver */
+#include "leds.h"
+#include "i2c.h"
+#include "timer.h"
+#include "lsm6dsl.h"
+
+#include <math.h>
+
+
+#if !defined(__SOFT_FP__) && defined(__ARM_FP)
+  #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
+#endif
+
+// Redefine the libc _write() function so you can use printf in your code
+int _write(int file, char *ptr, int len) {
+    int i = 0;
+    for (i = 0; i < len; i++) {
+        ITM_SendChar(*ptr++);
+    }
+    return len;
+}
+
+volatile int32_t minute_counter = 60 * 2;
+volatile int32_t five_second_counter = 5 * 2;
+volatile int32_t ten_second_counter = 10 * 2;
+volatile int32_t two_counter = 2;
+volatile int32_t current_counter = 0;
+volatile int8_t isLost = 0;
+volatile int8_t shouldPrint = 0;
+volatile int32_t printCounter = 20; // start at 20 to instantly print lost message
+volatile int8_t isDiscoverable = 0; // default no, can be discovered only when lost
+
 int dataAvailable = 0;
 
 SPI_HandleTypeDef hspi3;
@@ -30,6 +68,22 @@ SPI_HandleTypeDef hspi3;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI3_Init(void);
+
+void TIM2_IRQHandler(void) {
+	if ((TIM2->SR & TIM_SR_UIF_Msk) == 1) { // update interrupt is pending
+		if (current_counter >= minute_counter) { // have waited 1 minute
+			isLost = 1; // set to lost
+			printCounter++; // keep track of when to print
+
+
+		}
+		current_counter++; // keeping track of lost time
+	}
+
+	TIM2-> SR &= ~TIM_SR_UIF_Msk; // reset
+	timer_reset(TIM2);
+}
+
 
 /**
   * @brief  The application entry point.
@@ -39,6 +93,7 @@ int main(void)
 {
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
+
 
   /* Configure the system clock */
   SystemClock_Config();
@@ -56,18 +111,123 @@ int main(void)
 
   HAL_Delay(10);
 
-  uint8_t nonDiscoverable = 0;
 
-  while (1)
-  {
-	  if(!nonDiscoverable && HAL_GPIO_ReadPin(BLE_INT_GPIO_Port,BLE_INT_Pin)){
-	    catchBLE();
-	  }else{
-		  HAL_Delay(1000);
-		  // Send a string to the NORDIC UART service, remember to not include the newline
-		  unsigned char test_str[] = "youlostit BLE test";
-		  updateCharValue(NORDIC_UART_SERVICE_HANDLE, READ_CHAR_HANDLE, 0, sizeof(test_str)-1, test_str);
+  int16_t x = 0;
+  int16_t y = 0;
+  int16_t z = 0;
+  int16_t prev_x = 0;
+  int16_t prev_y = 0;
+  int16_t prev_z = 0;
+
+  // Initialize I2C and accelerometer
+  i2c_init();
+  lsm6dsl_init();
+  leds_init();
+
+  // Initialize the timer
+  timer_init(TIM2);
+
+  timer_set_ms(TIM2, 1000); // should tick every 1 second
+
+  int16_t threshold = 500; // calibrating the sensitivity
+
+  uint8_t has_movement = 0; // no movement
+
+  setDiscoverability(0); // start off as not discoverable
+
+//  uint8_t nonDiscoverable = 0;
+//
+//  int32_t tracker = current_counter;
+
+  HAL_Delay(10);
+
+  timer_reset(TIM2); // reset timer before we start the loop
+
+  while (1){
+
+	  if (isDiscoverable && HAL_GPIO_ReadPin(BLE_INT_GPIO_Port,BLE_INT_Pin)) { // catch connection if connection is available?
+		  catchBLE();
 	  }
+
+	  lsm6dsl_read_xyz(&x, &y, &z); // Read acceleration data
+
+	  // movement logic--if there is movement relative to the previous iteration, then reset timer
+	  if (((x - prev_x > threshold) || ((x - prev_x) < -threshold))) {
+			printf("x-movement\n");
+			has_movement = 1;
+		}
+
+		if (((y - prev_y > threshold) || ((y - prev_y) < -threshold))) {
+			printf("y-movement\n");
+			has_movement = 1;
+		}
+
+		if (((z - prev_z > threshold) || ((z - prev_z) < -threshold))) {
+			printf("z-movement\n");
+			has_movement = 1;
+		}
+
+		prev_x = x;
+		prev_y = y;
+		prev_z = z;
+
+		// HAL_Delay(1000);
+
+		if (has_movement == 1) { // not lost, reset the timer
+
+			// reset the counter
+			current_counter = 0;
+
+			// not lost
+			isLost = 0;
+
+			leds_set(0);
+
+		}
+
+		has_movement = 0;
+
+		if (isLost == 1) {
+			leds_set(3);
+
+			// want to change to be discoverable while lost
+			if (isDiscoverable == 0) {
+				isDiscoverable = 1;
+				//RESET BLE MODULE
+				HAL_GPIO_WritePin(BLE_RESET_GPIO_Port,BLE_RESET_Pin,GPIO_PIN_RESET);
+				HAL_Delay(10);
+				HAL_GPIO_WritePin(BLE_RESET_GPIO_Port,BLE_RESET_Pin,GPIO_PIN_SET);
+
+				ble_init();
+
+				HAL_Delay(10);
+
+				setDiscoverability(1); // changed to discoverable
+			}
+
+			// Send a string to the NORDIC UART service, remember to not include the newline
+			if (printCounter >= ten_second_counter) {
+				printCounter = 0; // reset
+				char str[21];
+				snprintf(str, sizeof(str), "Zx7 lost %d s", (int) (current_counter / 2.0));
+				updateCharValue(NORDIC_UART_SERVICE_HANDLE, READ_CHAR_HANDLE, 0, strlen(str), str);
+				HAL_Delay(1000);
+
+			}
+
+
+		} else { // not lost
+			if (isDiscoverable == 1) { // don't want it to be discoverable while not lost
+				isDiscoverable = 0;
+				disconnectBLE(); // disconnect the BLE
+				setDiscoverability(0); // changed to not discoverable
+				HAL_Delay(1000);
+				printCounter = 10; // reset the printCounter to original default value
+			}
+		}
+
+
+
 	  // Wait for interrupt, only uncomment if low power is needed
 	  //__WFI();
   }

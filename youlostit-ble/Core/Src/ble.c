@@ -15,7 +15,8 @@
  extern int dataAvailable;
  
  // Device name sent in BLE advertisement packets
- uint8_t deviceName[]={'P','r','i','v','T','a','g'};
+ // uint8_t deviceName[]={'B','r','i','c','T','a','g'};
+ uint8_t deviceName[]={'Z','Z','Z','Z','Z','Z','Z'};
  
  uint8_t buffer[255];
  
